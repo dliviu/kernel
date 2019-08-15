@@ -479,6 +479,12 @@ static long cdce925_clk_y1_round_rate(struct clk_hw *hw, unsigned long rate,
 	unsigned long l_parent_rate = *parent_rate;
 	u16 divider = cdce925_y1_calc_divider(rate, l_parent_rate);
 
+	if (l_parent_rate / divider != rate) {
+		l_parent_rate = cdce925_clk_best_parent_rate(hw, rate);
+		divider = cdce925_y1_calc_divider(rate, l_parent_rate);
+		*parent_rate = l_parent_rate;
+	}
+
 	if (divider)
 		return (long)(l_parent_rate / divider);
 	return 0;
@@ -664,8 +670,8 @@ static int cdce925_probe(struct i2c_client *client)
 	/* PWDN bit */
 	regmap_update_bits(data->regmap, CDCE925_REG_GLOBAL1, BIT(4), 0);
 
-	/* Set input source for Y1 to be the XTAL */
-	regmap_update_bits(data->regmap, 0x02, BIT(7), 0);
+	/* Set input source for Y1 to be PLL1 */
+	regmap_update_bits(data->regmap, 0x02, BIT(7), BIT(7));
 
 	init.ops = &cdce925_pll_ops;
 	init.flags = 0;
@@ -717,9 +723,9 @@ static int cdce925_probe(struct i2c_client *client)
 
 	/* Register output clock Y1 */
 	init.ops = &cdce925_clk_y1_ops;
-	init.flags = 0;
+	init.flags = CLK_SET_RATE_PARENT;
 	init.num_parents = 1;
-	init.parent_names = &parent_name; /* Mux Y1 to input */
+	init.parent_names = &pll_clk_name[0]; /* Mux Y1 to PLL1 */
 	init.name = kasprintf(GFP_KERNEL, "%pOFn.Y1", client->dev.of_node);
 	if (!init.name) {
 		err = -ENOMEM;
