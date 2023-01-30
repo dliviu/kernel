@@ -4,6 +4,9 @@
 #include <dt-bindings/clock/mt7621-clk.h>
 #include <dt-bindings/reset/mt7621-reset.h>
 
+#define SINGLE_PORT	0
+#define DUAL_PORT	1
+
 / {
 	compatible = "mediatek,mt7621-soc";
 
@@ -533,7 +536,7 @@
 			interrupt-map = <0 0 0 0 &gic GIC_SHARED 4 IRQ_TYPE_LEVEL_HIGH>;
 
 			phy-names = "pcie-phy0";
-			phys = <&pcie0_phy 1>;
+			phys = <&pcie0_phy DUAL_PORT>;
 
 			resets = <&sysc MT7621_RST_PCIE0>;
 		};
@@ -554,7 +557,7 @@
 			interrupt-map = <0 0 0 0 &gic GIC_SHARED 24 IRQ_TYPE_LEVEL_HIGH>;
 
 			phy-names = "pcie-phy1";
-			phys = <&pcie0_phy 1>;
+			phys = <&pcie0_phy DUAL_PORT>;
 
 			resets = <&sysc MT7621_RST_PCIE1>;
 		};
@@ -575,7 +578,7 @@
 			interrupt-map = <0 0 0 0 &gic GIC_SHARED 25 IRQ_TYPE_LEVEL_HIGH>;
 
 			phy-names = "pcie-phy2";
-			phys = <&pcie2_phy 0>;
+			phys = <&pcie2_phy SINGLE_PORT>;
 
 			resets = <&sysc MT7621_RST_PCIE2>;
 		};
