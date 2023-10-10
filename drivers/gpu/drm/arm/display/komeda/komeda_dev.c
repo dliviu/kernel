@@ -112,7 +112,8 @@ static int komeda_parse_pipe_dt(struct komeda_pipeline *pipe)
 
 	clk = of_clk_get_by_name(np, "pxclk");
 	if (IS_ERR(clk)) {
-		DRM_ERROR("get pxclk for pipeline %d failed!\n", pipe->id);
+		DRM_ERROR("get pxclk for pipeline %d failed with %ld!\n",
+			  pipe->id, PTR_ERR(clk));
 		return PTR_ERR(clk);
 	}
 	pipe->pxlclk = clk;
@@ -137,6 +138,7 @@ static int komeda_parse_dt(struct device *dev, struct komeda_dev *mdev)
 	struct komeda_pipeline *pipe;
 	u32 pipe_id = U32_MAX;
 	int ret = -1;
+	u32 valid_pipelines = 0;
 
 	mdev->irq  = platform_get_irq(pdev, 0);
 	if (mdev->irq < 0) {
@@ -165,14 +167,17 @@ static int komeda_parse_dt(struct device *dev, struct komeda_dev *mdev)
 		pipe = mdev->pipelines[pipe_id];
 
 		if (!pipe->of_node) {
-			DRM_ERROR("Pipeline-%d doesn't have a DT node.\n",
+			DRM_INFO("Pipeline-%d doesn't have a DT node.\n",
 				  pipe->id);
-			return -EINVAL;
+			continue;
 		}
 		ret = komeda_parse_pipe_dt(pipe);
 		if (ret)
 			return ret;
+		valid_pipelines++;
 	}
+
+	mdev->n_pipelines = valid_pipelines;
 
 	return 0;
 }
