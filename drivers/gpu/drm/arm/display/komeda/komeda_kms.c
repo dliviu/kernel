@@ -42,6 +42,9 @@ static irqreturn_t komeda_kms_irq_handler(int irq, void *data)
 	irqreturn_t status;
 	u32 i;
 
+	if (!mdev)
+		return IRQ_NONE;
+
 	/* Call into the CHIP to recognize events */
 	memset(&evts, 0, sizeof(evts));
 	status = mdev->funcs->irq_handler(mdev, &evts);
