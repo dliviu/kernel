@@ -561,8 +561,10 @@ static int d71_connect_iommu(struct komeda_dev *mdev)
 			 GCU_STATUS_TCS0 | GCU_STATUS_TCS1 : GCU_STATUS_TCS0;
 	int i, ret;
 
-	if (!d71->integrates_tbu)
+	if (!d71->integrates_tbu) {
+		DRM_INFO("devices doesn't integrate a TBU");
 		return -1;
+	}
 
 	malidp_write32_mask(reg, BLK_CONTROL, 0x7, TBU_CONNECT_MODE);
 

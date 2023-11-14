@@ -237,6 +237,7 @@ struct komeda_layer {
 	 * not the source buffer.
 	 */
 	struct komeda_layer *right;
+	struct komeda_layer *sbs_slave;	/* can we use right here? */
 };
 
 struct komeda_layer_state {
@@ -525,6 +526,7 @@ struct komeda_crtc_state;
 struct komeda_crtc;
 
 void pipeline_composition_size(struct komeda_crtc_state *kcrtc_st,
+			       bool side_by_side,
 			       u16 *hsize, u16 *vsize);
 
 int komeda_build_layer_data_flow(struct komeda_layer *layer,
@@ -542,6 +544,10 @@ int komeda_build_layer_split_data_flow(struct komeda_layer *left,
 				       struct komeda_plane_state *kplane_st,
 				       struct komeda_crtc_state *kcrtc_st,
 				       struct komeda_data_flow_cfg *dflow);
+int komeda_build_layer_sbs_data_flow(struct komeda_layer *layer,
+				     struct komeda_plane_state *kplane_st,
+				     struct komeda_crtc_state *kcrtc_st,
+				     struct komeda_data_flow_cfg *dflow);
 int komeda_build_wb_split_data_flow(struct komeda_layer *wb_layer,
 				    struct drm_connector_state *conn_st,
 				    struct komeda_crtc_state *kcrtc_st,

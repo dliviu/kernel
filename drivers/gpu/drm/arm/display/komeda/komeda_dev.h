@@ -174,6 +174,11 @@ struct komeda_dev {
 	/** @irq: irq number */
 	int irq;
 
+	/** @side_by_side: use master:slave pipelines for left:right side split */
+	bool side_by_side;
+	/** @sbs_master: master pipe id for side-by-side mode */
+	int sbs_master;
+
 	/** @lock: used to protect dpmode */
 	struct mutex lock;
 	/** @dpmode: current display mode */

@@ -77,6 +77,7 @@ komeda_plane_atomic_check(struct drm_plane *plane,
 	struct komeda_plane_state *kplane_st = to_kplane_st(new_plane_state);
 	struct komeda_layer *layer = kplane->layer;
 	struct drm_crtc_state *crtc_st;
+	struct komeda_crtc *kcrtc;
 	struct komeda_crtc_state *kcrtc_st;
 	struct komeda_data_flow_cfg dflow;
 	int err;
@@ -95,13 +96,17 @@ komeda_plane_atomic_check(struct drm_plane *plane,
 	if (!crtc_st->active)
 		return 0;
 
+	kcrtc = to_kcrtc(crtc_st->crtc);
 	kcrtc_st = to_kcrtc_st(crtc_st);
 
 	err = komeda_plane_init_data_flow(new_plane_state, kcrtc_st, &dflow);
 	if (err)
 		return err;
 
-	if (dflow.en_split)
+	if (kcrtc->side_by_side)
+		err = komeda_build_layer_sbs_data_flow(layer,
+				kplane_st, kcrtc_st, &dflow);
+	else if (dflow.en_split)
 		err = komeda_build_layer_split_data_flow(layer,
 				kplane_st, kcrtc_st, &dflow);
 	else
@@ -232,7 +237,8 @@ komeda_set_crtc_plane_mask(struct komeda_kms_dev *kms,
 static u32 get_plane_type(struct komeda_kms_dev *kms,
 			  struct komeda_component *c)
 {
-	bool is_primary = (c->id == KOMEDA_COMPONENT_LAYER0);
+	bool is_primary = ((kms->n_primary_planes < kms->n_crtcs) &&
+			   (c->id == KOMEDA_COMPONENT_LAYER0));
 
 	return is_primary ? DRM_PLANE_TYPE_PRIMARY : DRM_PLANE_TYPE_OVERLAY;
 }
@@ -244,7 +250,7 @@ static int komeda_plane_add(struct komeda_kms_dev *kms,
 	struct komeda_component *c = &layer->base;
 	struct komeda_plane *kplane;
 	struct drm_plane *plane;
-	u32 *formats, n_formats = 0;
+	u32 *formats, plane_type, n_formats = 0;
 	int err;
 
 	kplane = kzalloc(sizeof(*kplane), GFP_KERNEL);
@@ -261,11 +267,15 @@ static int komeda_plane_add(struct komeda_kms_dev *kms,
 		return -ENOMEM;
 	}
 
+	plane_type = get_plane_type(kms, c);
+	if (plane_type == DRM_PLANE_TYPE_PRIMARY)
+		kms->n_primary_planes++;
+
 	err = drm_universal_plane_init(&kms->base, plane,
 			get_possible_crtcs(kms, c->pipeline),
 			&komeda_plane_funcs,
 			formats, n_formats, komeda_supported_modifiers,
-			get_plane_type(kms, c),
+			plane_type,
 			"%s", c->name);
 
 	komeda_put_fourcc_list(formats);

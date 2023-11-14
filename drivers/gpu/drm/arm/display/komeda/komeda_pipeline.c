@@ -174,7 +174,7 @@ komeda_component_add(struct komeda_pipeline *pipe,
 	int idx, *num = NULL;
 
 	if (max_active_inputs > KOMEDA_COMPONENT_N_INPUTS) {
-		WARN(1, "please large KOMEDA_COMPONENT_N_INPUTS to %d.\n",
+		WARN(1, "please increase KOMEDA_COMPONENT_N_INPUTS to %d.\n",
 		     max_active_inputs);
 		return ERR_PTR(-ENOSPC);
 	}
@@ -335,12 +335,51 @@ static void komeda_pipeline_assemble(struct komeda_pipeline *pipe)
 struct komeda_pipeline *
 komeda_pipeline_get_slave(struct komeda_pipeline *master)
 {
-	struct komeda_component *slave;
+	struct komeda_dev *mdev = master->mdev;
+	struct komeda_component *comp, *slave;
+	u32 avail_inputs;
 
-	slave = komeda_component_pickup_input(&master->compiz->base,
-					      KOMEDA_PIPELINE_COMPIZS);
+	/*
+	 * on side-by-side, slave pipeline gets merged to master pipeline
+	 * via image processor
+	 */
+	if (mdev->side_by_side) {
+		comp = &master->improc->base;
+		avail_inputs = KOMEDA_PIPELINE_IMPROCS;
+	} else {
+		comp = &master->compiz->base;
+		avail_inputs = KOMEDA_PIPELINE_COMPIZS;
+	}
+
+	slave = komeda_component_pickup_input(comp, avail_inputs);
 
 	return slave ? slave->pipeline : NULL;
+}
+
+static int komeda_assemble_side_by_side(struct komeda_dev *mdev)
+{
+	struct komeda_pipeline *master, *slave;
+	int i;
+
+	if (!mdev->side_by_side)
+		return 0;
+
+	master = mdev->pipelines[mdev->sbs_master];
+	slave = komeda_pipeline_get_slave(master);
+	if (!slave || slave->n_layers != master->n_layers) {
+		DRM_ERROR("HW does not support side-by-side mode.\n");
+		return -EINVAL;
+	}
+
+	if (!master->dual_link) {
+		DRM_DEBUG_ATOMIC("Side-by-side needs dual link mode.\n");
+		/* return -EINVAL; */
+	}
+
+	for (i = 0; i < master->n_layers; i++)
+		master->layers[i]->sbs_slave = slave->layers[i];
+
+	return 0;
 }
 
 int komeda_assemble_pipelines(struct komeda_dev *mdev)
@@ -354,7 +393,7 @@ int komeda_assemble_pipelines(struct komeda_dev *mdev)
 		komeda_pipeline_assemble(pipe);
 	}
 
-	return 0;
+	return komeda_assemble_side_by_side(mdev);
 }
 
 void komeda_pipeline_dump_register(struct komeda_pipeline *pipe,

@@ -76,6 +76,9 @@ struct komeda_crtc {
 	 */
 	struct komeda_pipeline *slave;
 
+	/** @side_by_side: true if master and slave work side-by-side */
+	bool side_by_side;
+
 	/** @slave_planes: komeda slave planes mask */
 	u32 slave_planes;
 
@@ -122,6 +125,8 @@ struct komeda_kms_dev {
 	/** @base: &drm_device */
 	struct drm_device base;
 
+	/** @n_primary_planes: number of primary planes defined */
+	int n_primary_planes;
 	/** @n_crtcs: valid numbers of crtcs in &komeda_kms_dev.crtcs */
 	int n_crtcs;
 	/** @crtcs: crtcs list */

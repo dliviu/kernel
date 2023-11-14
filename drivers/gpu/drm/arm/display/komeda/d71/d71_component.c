@@ -1087,6 +1087,10 @@ static void d71_improc_update(struct komeda_component *c,
 	else if (st->color_format == DRM_COLOR_FORMAT_YCBCR444)
 		ctrl |= IPS_CTRL_YUV;
 
+	/* if slave input has been enabled, that means side-by-side */
+	if (has_bit(1, state->active_inputs))
+		ctrl |= IPS_CTRL_SBS;
+
 	malidp_write32_mask(reg, BLK_CONTROL, mask, ctrl);
 }
 

@@ -179,6 +179,15 @@ static int komeda_parse_dt(struct device *dev, struct komeda_dev *mdev)
 
 	mdev->n_pipelines = valid_pipelines;
 
+	mdev->side_by_side = !of_property_read_u32(np, "side-by-side-master",
+						   &mdev->sbs_master);
+
+	if (mdev->sbs_master >= mdev->n_pipelines) {
+		DRM_ERROR("Side-by-side master ID %d is invalid.\n",
+			  mdev->sbs_master);
+		mdev->side_by_side = 0;
+	}
+
 	return 0;
 }
 

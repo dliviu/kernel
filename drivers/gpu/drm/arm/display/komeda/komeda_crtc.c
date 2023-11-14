@@ -397,7 +397,19 @@ komeda_crtc_atomic_flush(struct drm_crtc *crtc,
 	komeda_crtc_do_flush(crtc, old);
 }
 
-/* Returns the minimum frequency of the aclk rate (main engine clock) in Hz */
+/*
+ * Returns the minimum frequency of the aclk rate (main engine clock) in Hz.
+ *
+ * The DPU output can be split into two halves, to stay within the bandwidth
+ * capabilities of the external link (dual-link mode). In these cases, each
+ * output link runs at half the pixel clock rate of the combined display,
+ * and has half the number of pixels.
+ *
+ * Besides splitting the output, the DPU internal pixel processing also can
+ * be split into two halves (left/right) and handled by two pipelines
+ * simultaneously. If this side-by-side mode is enabled, the pipeline's main
+ * engine clock can also run at half the clock rate of the combined display.
+ */
 static unsigned long
 komeda_calc_min_aclk_rate(struct komeda_crtc *kcrtc,
 			  unsigned long pxlclk)
@@ -405,7 +417,7 @@ komeda_calc_min_aclk_rate(struct komeda_crtc *kcrtc,
 	/* Once dual-link one display pipeline drives two display outputs,
 	 * the aclk needs run on the double rate of pxlclk
 	 */
-	if (kcrtc->master->dual_link)
+	if (kcrtc->master->dual_link && !kcrtc->side_by_side)
 		return pxlclk * 2;
 	else
 		return pxlclk;
@@ -570,19 +582,25 @@ int komeda_kms_setup_crtcs(struct komeda_kms_dev *kms,
 	kms->n_crtcs = 0;
 
 	for (i = 0; i < mdev->n_pipelines; i++) {
+		/* if in side-by-side mode, only use master CRTC */
+		if (mdev->side_by_side && i != mdev->sbs_master)
+			continue;
+
 		crtc = &kms->crtcs[kms->n_crtcs];
 		master = mdev->pipelines[i];
 
 		crtc->master = master;
 		crtc->slave  = komeda_pipeline_get_slave(master);
+		crtc->side_by_side = mdev->side_by_side;
 
 		if (crtc->slave)
 			sprintf(str, "pipe-%d", crtc->slave->id);
 		else
 			sprintf(str, "None");
 
-		DRM_INFO("CRTC-%d: master(pipe-%d) slave(%s).\n",
-			 kms->n_crtcs, master->id, str);
+		DRM_INFO("CRTC-%d: master(pipe-%d) slave(%s) sbs(%s).\n",
+			 kms->n_crtcs, master->id, str,
+			 crtc->side_by_side ? "on" : "off");
 
 		kms->n_crtcs++;
 	}

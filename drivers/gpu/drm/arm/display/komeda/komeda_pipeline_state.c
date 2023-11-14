@@ -654,12 +654,13 @@ komeda_merger_validate(struct komeda_merger *merger,
 }
 
 void pipeline_composition_size(struct komeda_crtc_state *kcrtc_st,
+			       bool side_by_side,
 			       u16 *hsize, u16 *vsize)
 {
 	struct drm_display_mode *m = &kcrtc_st->base.adjusted_mode;
 
 	if (hsize)
-		*hsize = m->hdisplay;
+		*hsize = m->hdisplay / (side_by_side ? 2 : 1);
 	if (vsize)
 		*vsize = m->vdisplay;
 }
@@ -670,12 +671,14 @@ komeda_compiz_set_input(struct komeda_compiz *compiz,
 			struct komeda_data_flow_cfg *dflow)
 {
 	struct drm_atomic_state *drm_st = kcrtc_st->base.state;
+	struct drm_crtc *crtc = kcrtc_st->base.crtc;
 	struct komeda_component_state *c_st, *old_st;
 	struct komeda_compiz_input_cfg *cin;
 	u16 compiz_w, compiz_h;
 	int idx = dflow->blending_zorder;
 
-	pipeline_composition_size(kcrtc_st, &compiz_w, &compiz_h);
+	pipeline_composition_size(kcrtc_st, to_kcrtc(crtc)->side_by_side,
+				  &compiz_w, &compiz_h);
 	/* check display rect */
 	if ((dflow->out_x + dflow->out_w > compiz_w) ||
 	    (dflow->out_y + dflow->out_h > compiz_h) ||
@@ -687,7 +690,7 @@ komeda_compiz_set_input(struct komeda_compiz *compiz,
 	}
 
 	c_st = komeda_component_get_state_and_set_user(&compiz->base, drm_st,
-			kcrtc_st->base.crtc, kcrtc_st->base.crtc);
+			crtc, crtc);
 	if (IS_ERR(c_st))
 		return PTR_ERR(c_st);
 
@@ -721,17 +724,19 @@ komeda_compiz_validate(struct komeda_compiz *compiz,
 		       struct komeda_crtc_state *state,
 		       struct komeda_data_flow_cfg *dflow)
 {
+	struct drm_crtc *crtc = state->base.crtc;
 	struct komeda_component_state *c_st;
 	struct komeda_compiz_state *st;
 
 	c_st = komeda_component_get_state_and_set_user(&compiz->base,
-			state->base.state, state->base.crtc, state->base.crtc);
+			state->base.state, crtc, crtc);
 	if (IS_ERR(c_st))
 		return PTR_ERR(c_st);
 
 	st = to_compiz_st(c_st);
 
-	pipeline_composition_size(state, &st->hsize, &st->vsize);
+	pipeline_composition_size(state, to_kcrtc(crtc)->side_by_side,
+				  &st->hsize, &st->vsize);
 
 	komeda_component_set_output(&dflow->input, &compiz->base, 0);
 
@@ -757,7 +762,8 @@ komeda_compiz_validate(struct komeda_compiz *compiz,
 static int
 komeda_improc_validate(struct komeda_improc *improc,
 		       struct komeda_crtc_state *kcrtc_st,
-		       struct komeda_data_flow_cfg *dflow)
+		       struct komeda_data_flow_cfg *m_dflow,
+		       struct komeda_data_flow_cfg *s_dflow)
 {
 	struct drm_crtc *crtc = kcrtc_st->base.crtc;
 	struct drm_crtc_state *crtc_st = &kcrtc_st->base;
@@ -771,8 +777,8 @@ komeda_improc_validate(struct komeda_improc *improc,
 
 	st = to_improc_st(c_st);
 
-	st->hsize = dflow->in_w;
-	st->vsize = dflow->in_h;
+	st->hsize = m_dflow->in_w;
+	st->vsize = m_dflow->in_h;
 
 	if (drm_atomic_crtc_needs_modeset(crtc_st)) {
 		u32 output_depths, output_formats;
@@ -808,8 +814,10 @@ komeda_improc_validate(struct komeda_improc *improc,
 		drm_ctm_to_coeffs(kcrtc_st->base.ctm, st->ctm_coeffs);
 	}
 
-	komeda_component_add_input(&st->base, &dflow->input, 0);
-	komeda_component_set_output(&dflow->input, &improc->base, 0);
+	komeda_component_add_input(&st->base, &m_dflow->input, 0);
+	if (s_dflow)
+		komeda_component_add_input(&st->base, &s_dflow->input, 1);
+	komeda_component_set_output(&m_dflow->input, &improc->base, 0);
 
 	return 0;
 }
@@ -1146,6 +1154,201 @@ int komeda_build_wb_data_flow(struct komeda_layer *wb_layer,
 	return komeda_wb_layer_validate(wb_layer, conn_st, dflow);
 }
 
+/* side-by-side will split configuration of master plane to two
+ * layer data flows which will then be fed into master and slave
+ * pipelines.
+ * NOTE: @m_dflow is used as both input and output.
+ */
+static int
+komeda_split_sbs_master_data_flow(struct komeda_crtc_state *kcrtc_st,
+				  struct komeda_data_flow_cfg **m_dflow,
+				  struct komeda_data_flow_cfg **s_dflow)
+{
+	struct komeda_data_flow_cfg *master = *m_dflow;
+	struct komeda_data_flow_cfg *slave = *s_dflow;
+	u32 disp_end = master->out_x + master->out_w;
+	u16 boundary;
+
+	if (!master || !slave)
+		return -EINVAL;
+
+	pipeline_composition_size(kcrtc_st, true, &boundary, NULL);
+
+	if (disp_end <= boundary) {
+		/* master viewport located only on master side, no slave */
+		*s_dflow = NULL;
+	} else if ((master->out_x < boundary) && (disp_end > boundary)) {
+		/* master viewport across pipelines, split it */
+		bool flip_h = has_flip_h(master->rot);
+		bool r90 = drm_rotation_90_or_270(master->rot);
+		u32 src_x = master->in_x;
+		u32 src_y = master->in_y;
+		u32 src_w = master->in_w;
+		u32 src_h = master->in_h;
+
+		if (master->en_scaling || master->en_img_enhancement) {
+			DRM_DEBUG_ATOMIC("side-by-side doesn't work for scaled images.\n");
+			return -EINVAL;
+		}
+
+		memcpy(slave, master, sizeof(*master));
+
+		/* split the disp_rect */
+		master->out_w = boundary - master->out_x;
+		slave->out_w = disp_end - boundary;
+		slave->out_x = 0;
+
+		if (r90) {
+			master->in_h = master->out_w;
+			slave->in_h = slave->out_w;
+
+			if (flip_h)
+				master->in_y = src_y + src_h - master->in_h;
+			else
+				slave->in_y = src_y + src_h - slave->in_h;
+		} else {
+			master->in_w = master->out_w;
+			slave->in_w = slave->out_w;
+
+			/* on flip_h, left displays content from right source */
+			if (flip_h)
+				master->in_x = src_x + src_w - master->in_w;
+			else
+				slave->in_x = src_x + src_w - slave->in_w;
+		}
+	} else if (master->out_x >= boundary) {
+		/* master viewport on the slave side, move dflow to slave */
+		master->out_x -= boundary;
+		*s_dflow = master;
+		*m_dflow = NULL;
+	}
+
+	return 0;
+}
+
+static int
+komeda_split_sbs_slave_data_flow(struct komeda_crtc_state *kcrtc_st,
+				 struct komeda_data_flow_cfg *slave)
+{
+	u16 boundary;
+
+	pipeline_composition_size(kcrtc_st, true, &boundary, NULL);
+
+	if (slave->out_x < boundary) {
+		DRM_DEBUG_ATOMIC("side-sy-side slave only allow to configure right part of the frame.\n");
+		return -EINVAL;
+	}
+
+	slave->out_x -= boundary;
+
+	return 0;
+}
+
+static inline const char *
+komeda_data_flow_msg(struct komeda_data_flow_cfg *config)
+{
+	static char str[128];
+
+	snprintf(str, sizeof(str),
+		 "rot: %x src[x/y:%d/%d, w/h:%d/%d] disp[x/y:%d/%d, w/h:%d/%d]",
+		 config->rot,
+		 config->in_x, config->in_y, config->in_w, config->in_h,
+		 config->out_x, config->out_y, config->out_w, config->out_h);
+
+	return str;
+}
+
+/*
+ * Side-by-side mode: full display frame will be split into two parts (left/right),
+ * with each part handled by a single pipeline (master for left side, slave for right).
+ *
+ * To simplify usage, komeda uses the following scheme to do side-by-side split:
+ * 1. Planes are grouped into two classes: master-planes and slave-planes
+ * 2. Master planes can render anywhere in the final/full display frame, driver will
+ *    help split the plane configuration into master and slave pipelines.
+ * 3. Slave planes can only render on the right side of the final/full display frame
+ *    and its data can only be fed into the slave pipeline.
+ *
+ * From the resource usage and assignment perspective, the master planes can use the
+ * resources of both master and slave pipelines, while slave planes can only use the
+ * slave pipeline resources.
+ */
+int komeda_build_layer_sbs_data_flow(struct komeda_layer *layer,
+				     struct komeda_plane_state *kplane_st,
+				     struct komeda_crtc_state *kcrtc_st,
+				     struct komeda_data_flow_cfg *dflow)
+{
+	struct komeda_crtc *kcrtc = to_kcrtc(kcrtc_st->base.crtc);
+	struct drm_plane *plane = kplane_st->base.plane;
+	struct komeda_data_flow_cfg temp, *master_dflow, *slave_dflow;
+	struct komeda_layer *master, *slave;
+	bool master_plane = layer->base.pipeline == kcrtc->master;
+	int err;
+
+	DRM_DEBUG_ATOMIC("side-by-side preparation: %s-[PLANE:%d:%s]: %s.\n",
+			 master_plane ? "Master" : "Slave",
+			 plane->base.id, plane->name,
+			 komeda_data_flow_msg(dflow));
+
+	if (master_plane) {
+		master = layer;
+		slave = layer->sbs_slave;
+		master_dflow = dflow;
+		slave_dflow = &temp;
+		err = komeda_split_sbs_master_data_flow(kcrtc_st,
+							&master_dflow,
+							&slave_dflow);
+	} else {
+		master = NULL;
+		slave = layer;
+		master_dflow = NULL;
+		slave_dflow = dflow;
+		err = komeda_split_sbs_slave_data_flow(kcrtc_st, slave_dflow);
+	}
+
+	if (err)
+		return err;
+
+	if (master_dflow) {
+		DRM_DEBUG_ATOMIC("side-by-side Master-%s assigned: %s.\n",
+				 master->base.name,
+				 komeda_data_flow_msg(master_dflow));
+
+		if (master_dflow->en_split)
+			err = komeda_build_layer_split_data_flow(master,
+								 kplane_st,
+								 kcrtc_st,
+								 master_dflow);
+		else
+			err = komeda_build_layer_data_flow(master,
+							   kplane_st,
+							   kcrtc_st,
+							   master_dflow);
+		if (err)
+			return err;
+	}
+
+	if (slave_dflow) {
+		DRM_DEBUG_ATOMIC("side-by-side Slave-%s assigned: %s.\n",
+				 slave->base.name,
+				 komeda_data_flow_msg(slave_dflow));
+
+		if (slave_dflow->en_split)
+			err = komeda_build_layer_split_data_flow(slave,
+								 kplane_st,
+								 kcrtc_st,
+								 slave_dflow);
+		else
+			err = komeda_build_layer_data_flow(slave, kplane_st,
+							   kcrtc_st, slave_dflow);
+
+		if (err)
+			return err;
+	}
+
+	return 0;
+}
+
 /* writeback scaling split data path:
  *                   /-> scaler ->\
  * compiz -> splitter              merger -> wb_layer -> memory
@@ -1196,7 +1399,21 @@ int komeda_build_display_data_flow(struct komeda_crtc *kcrtc,
 	memset(&m_dflow, 0, sizeof(m_dflow));
 	memset(&s_dflow, 0, sizeof(s_dflow));
 
-	if (slave && has_bit(slave->id, kcrtc_st->active_pipes)) {
+	/* build slave output data flow */
+	if (kcrtc->side_by_side) {
+		/*
+		 * on side-by-side, slave's data flows into its improc
+		 * then onto the master's image processor
+		 */
+		err = komeda_compiz_validate(slave->compiz, kcrtc_st, &s_dflow);
+		if (err)
+			return err;
+
+		err = komeda_improc_validate(slave->improc, kcrtc_st,
+					     &s_dflow, NULL);
+		if (err)
+			return err;
+	} else if (slave && has_bit(slave->id, kcrtc_st->active_pipes)) {
 		err = komeda_compiz_validate(slave->compiz, kcrtc_st, &s_dflow);
 		if (err)
 			return err;
@@ -1212,7 +1429,9 @@ int komeda_build_display_data_flow(struct komeda_crtc *kcrtc,
 	if (err)
 		return err;
 
-	err = komeda_improc_validate(master->improc, kcrtc_st, &m_dflow);
+	/* on side-by-side, merge slave data flow into master image processor */
+	err = komeda_improc_validate(master->improc, kcrtc_st, &m_dflow,
+				     kcrtc->side_by_side ? &s_dflow : NULL);
 	if (err)
 		return err;
 
