@@ -294,7 +294,7 @@ komeda_crtc_flush_and_wait_for_flip_done(struct komeda_crtc *kcrtc,
 	struct drm_device *drm = kcrtc->base.dev;
 	struct komeda_dev *mdev = kcrtc->master->mdev;
 	struct completion *flip_done;
-	struct completion temp;
+	DECLARE_COMPLETION_ONSTACK(temp);
 
 	/* if caller doesn't send a flip_done, use a private flip_done */
 	if (input_flip_done) {
@@ -308,15 +308,14 @@ komeda_crtc_flush_and_wait_for_flip_done(struct komeda_crtc *kcrtc,
 	mdev->funcs->flush(mdev, kcrtc->master->id, 0);
 
 	/* wait the flip take affect.*/
-	if (wait_for_completion_timeout(flip_done, HZ) == 0) {
+	if (wait_for_completion_timeout(flip_done, HZ) == 0)
 		DRM_ERROR("wait pipe%d flip done timeout\n", kcrtc->master->id);
-		if (!input_flip_done) {
-			unsigned long flags;
+	if (!input_flip_done) {
+		unsigned long flags;
 
-			spin_lock_irqsave(&drm->event_lock, flags);
-			kcrtc->disable_done = NULL;
-			spin_unlock_irqrestore(&drm->event_lock, flags);
-		}
+		spin_lock_irqsave(&drm->event_lock, flags);
+		kcrtc->disable_done = NULL;
+		spin_unlock_irqrestore(&drm->event_lock, flags);
 	}
 }
 
