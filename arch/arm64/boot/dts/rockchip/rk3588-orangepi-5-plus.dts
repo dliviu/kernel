@@ -9,6 +9,7 @@
 #include <dt-bindings/leds/common.h>
 #include <dt-bindings/input/input.h>
 #include <dt-bindings/pinctrl/rockchip.h>
+#include <dt-bindings/soc/rockchip,vop2.h>
 #include <dt-bindings/usb/pd.h>
 #include "rk3588.dtsi"
 
@@ -254,6 +255,22 @@
 
 &cpu_l3 {
 	cpu-supply = <&vdd_cpu_lit_s0>;
+};
+
+&hdmi0 {
+	avdd-0v9-supply = <&hdmi_avdd_0v85_s0>;
+	avdd-1v8-supply = <&vcc_1v8_s0>;
+	status = "okay";
+};
+
+&hdmi0_in {
+	hdmi0_in_vp0: endpoint {
+		remote-endpoint = <&vp0_out_hdmi0>;
+	};
+};
+
+&hdptxphy_hdmi0 {
+	status = "okay";
 };
 
 &i2c0 {
@@ -754,8 +771,8 @@
 				};
 			};
 
-			avdd_0v75_s0: nldo-reg3 {
-				regulator-name = "avdd_0v75_s0";
+			hdmi_avdd_0v85_s0: nldo-reg3 {
+				regulator-name = "hdmi_avdd_0v85_s0";
 				regulator-always-on;
 				regulator-boot-on;
 				/*
@@ -800,6 +817,10 @@
 };
 
 &tsadc {
+	rockchip,grf = <&pmu1grf>;
+	rockchip,hw-tshut-temp = <95000>;
+	rockchip,hw-tshut-mode = <1>;
+	rockchip,hw-tshut-polarity = <0>;
 	status = "okay";
 };
 
@@ -845,4 +866,24 @@
 
 &usb_host1_ohci {
 	status = "okay";
+};
+
+&usb_host1_xhci {
+	dr_mode = "host";
+	status = "okay";
+};
+
+&vop_mmu {
+	status = "okay";
+};
+
+&vop {
+	status = "okay";
+};
+
+&vp0 {
+	vp0_out_hdmi0: endpoint@ROCKCHIP_VOP2_EP_HDMI0 {
+		reg = <ROCKCHIP_VOP2_EP_HDMI0>;
+		remote-endpoint = <&hdmi0_in_vp0>;
+	};
 };

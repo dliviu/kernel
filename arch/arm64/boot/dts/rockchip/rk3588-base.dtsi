@@ -1482,7 +1482,7 @@
 			 <&cru DCLK_VOP3>,
 			 <&cru HCLK_VO1>;
 		clock-names = "pclk",
-			      "hpd",
+			      "isfr",
 			      "earc",
 			      "hdmitx_ref",
 			      "aud",
@@ -2771,6 +2771,7 @@
 		assigned-clock-rates = <2000000>;
 		resets = <&cru SRST_P_TSADC>, <&cru SRST_TSADC>;
 		reset-names = "tsadc-apb", "tsadc";
+		rockchip,grf = <&pmu1grf>;
 		rockchip,hw-tshut-temp = <120000>;
 		rockchip,hw-tshut-mode = <0>; /* tshut mode 0:CRU 1:GPIO */
 		rockchip,hw-tshut-polarity = <0>; /* tshut polarity 0:LOW 1:HIGH */

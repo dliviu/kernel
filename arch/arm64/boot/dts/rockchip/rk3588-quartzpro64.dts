@@ -78,12 +78,6 @@
 		sound-name-prefix = "Headphones Amp";
 	};
 
-	speaker_amp: audio-amplifier-speaker {
-		compatible = "simple-audio-amplifier";
-		enable-gpios = <&gpio1 RK_PD3 GPIO_ACTIVE_HIGH>;
-		sound-name-prefix = "Speaker Amp";
-	};
-
 	leds {
 		compatible = "gpio-leds";
 		pinctrl-names = "default";
@@ -94,6 +88,23 @@
 			function = LED_FUNCTION_INDICATOR;
 			gpios = <&gpio3 RK_PB7 GPIO_ACTIVE_HIGH>;
 		};
+	};
+
+	fan: pwm-fan {
+		compatible = "pwm-fan";
+		#cooling-cells = <2>;
+		cooling-levels = <0 64 127 191 255>;
+		label = "cpu fan";
+		fan-driving-mode = "pwm";
+		fan-supply = <&vcc12v_dcin>;
+		pwms = <&pwm5 0 40000 0>;
+	};
+
+	rfkill {
+		compatible = "rfkill-gpio";
+		label = "rfkill-pcie-wlan";
+		radio-type = "wlan";
+		shutdown-gpios = <&gpio4 RK_PA2 GPIO_ACTIVE_HIGH>;
 	};
 
 	sound {
@@ -147,6 +158,12 @@
 			sound-dai = <&es8388>;
 			system-clock-frequency = <12288000>;
 		};
+	};
+
+	speaker_amp: audio-amplifier-speaker {
+		compatible = "simple-audio-amplifier";
+		enable-gpios = <&gpio1 RK_PD3 GPIO_ACTIVE_HIGH>;
+		sound-name-prefix = "Speaker Amp";
 	};
 
 	vcc12v_dcin: vcc12v-dcin-regulator {
@@ -297,13 +314,18 @@
 	hym8563: rtc@51 {
 		compatible = "haoyu,hym8563";
 		reg = <0x51>;
-		#clock-cells = <0>;
-		clock-output-names = "hym8563";
 		interrupt-parent = <&gpio0>;
 		interrupts = <RK_PD4 IRQ_TYPE_LEVEL_LOW>;
 		pinctrl-names = "default";
 		pinctrl-0 = <&hym8563_int>;
 		wakeup-source;
+
+		clk_32k: clock {
+			compatible = "fixed-clock";
+			#clock-cells = <0>;
+			clock-output-names = "hym8563";
+			clock-frequency = <32768>;
+		};
 	};
 };
 
@@ -345,6 +367,34 @@
 		reset-assert-us = <20000>;
 		reset-deassert-us = <100000>;
 		reset-gpios = <&gpio4 RK_PB3 GPIO_ACTIVE_LOW>;
+	};
+};
+
+&package_thermal {
+	polling-delay = <1000>;
+
+	trips {
+		package_fan0: package-fan0 {
+			temperature = <55000>;
+			hysteresis = <2000>;
+			type = "active";
+		};
+		package_fan1: package-fan1 {
+			temperature = <65000>;
+			hysteresis = <2000>;
+			type = "active";
+		};
+	};
+
+	cooling-maps {
+		map1 {
+			trip = <&package_fan0>;
+			cooling-device = <&fan THERMAL_NO_LIMIT 1>;
+		};
+		map2 {
+			trip = <&package_fan1>;
+			cooling-device = <&fan 2 THERMAL_NO_LIMIT>;
+		};
 	};
 };
 
@@ -392,13 +442,29 @@
 	reset-gpios = <&gpio4 RK_PA5 GPIO_ACTIVE_HIGH>;
 	vpcie3v3-supply = <&vcc3v3_wf>;
 	status = "okay";
+
+	pcie@0,0 {
+		reg = <0x200000 0 0 0 0>;
+		#address-cells = <3>;
+		#size-cells = <2>;
+		ranges;
+		device-type = "pci";
+		bus-range = <0x21 0x2f>;
+
+		wifi: wifi@0,0 {
+			compatible = "pci14e4,449d";
+			reg = <0x210000 0 0 0 0>;
+			clocks = <&clk_32k>;
+			clock-names = "32k";
+		};
+	};
 };
 
 /* GMAC1 */
 &pcie2x1l1 {
 	pinctrl-names = "default";
 	pinctrl-0 = <&rtl8111_isolate>;
-	reset-gpios = <&gpio4 RK_PA2 GPIO_ACTIVE_HIGH>;
+	vpcie3v3-supply = <&vcc_3v3_s0>;
 	status = "okay";
 };
 
@@ -409,6 +475,11 @@
 &pcie3x4 {
 	reset-gpios = <&gpio4 RK_PB6 GPIO_ACTIVE_HIGH>;
 	vpcie3v3-supply = <&vcc3v3_pcie30>;
+	status = "okay";
+};
+
+&pwm5 {
+	pinctrl-0 = <&pwm5m1_pins>;
 	status = "okay";
 };
 
@@ -1120,6 +1191,17 @@
 };
 
 &tsadc {
+	rockchip,hw-tshut-temp = <95000>;
+	rockchip,hw-tshut-mode = <1>;
+	rockchip,hw-tshut-polarity = <0>;
+	status = "okay";
+};
+
+&u2phy1 {
+	status = "okay";
+};
+
+&u2phy1_otg {
 	status = "okay";
 };
 
@@ -1147,6 +1229,10 @@
 	status = "okay";
 };
 
+&usbdp_phy1 {
+	status = "okay";
+};
+
 &usb_host0_ehci {
 	status = "okay";
 };
@@ -1160,5 +1246,10 @@
 };
 
 &usb_host1_ohci {
+	status = "okay";
+};
+
+&usb_host1_xhci {
+	dr_mode = "host";
 	status = "okay";
 };
