@@ -173,6 +173,10 @@ The total size of buffers that are purgeable.
 
 The total size of buffers that are active on one or more engines.
 
+- drm-internal-<region>: <uint> [KiB|MiB]
+
+The total size of GEM objects that aren't exposed to user space.
+
 Implementation Details
 ======================
 

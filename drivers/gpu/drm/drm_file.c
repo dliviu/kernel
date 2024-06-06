@@ -872,9 +872,10 @@ void drm_print_memory_stats(struct drm_printer *p,
 			    enum drm_gem_object_status supported_status,
 			    const char *region)
 {
-	print_size(p, "total", region, stats->private + stats->shared);
+	print_size(p, "total", region, stats->private + stats->shared + stats->internal);
 	print_size(p, "shared", region, stats->shared);
 	print_size(p, "active", region, stats->active);
+	print_size(p, "internal", region, stats->internal);
 
 	if (supported_status & DRM_GEM_OBJECT_RESIDENT)
 		print_size(p, "resident", region, stats->resident);
@@ -888,11 +889,12 @@ EXPORT_SYMBOL(drm_print_memory_stats);
  * drm_show_memory_stats - Helper to collect and show standard fdinfo memory stats
  * @p: the printer to print output to
  * @file: the DRM file
+ * @func: driver-specific function pointer to count the size of internal objects
  *
  * Helper to iterate over GEM objects with a handle allocated in the specified
  * file.
  */
-void drm_show_memory_stats(struct drm_printer *p, struct drm_file *file)
+void drm_show_memory_stats(struct drm_printer *p, struct drm_file *file, internal_bos func)
 {
 	struct drm_gem_object *obj;
 	struct drm_memory_stats status = {};
@@ -937,6 +939,9 @@ void drm_show_memory_stats(struct drm_printer *p, struct drm_file *file)
 			status.purgeable += add_size;
 	}
 	spin_unlock(&file->table_lock);
+
+	if (func)
+		func(&status, file);
 
 	drm_print_memory_stats(p, &status, supported_status, "memory");
 }
