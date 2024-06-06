@@ -1872,6 +1872,7 @@ struct panthor_vm *panthor_vm_get(struct panthor_vm *vm)
  * panthor_vm_get_heap_pool() - Get the heap pool attached to a VM
  * @vm: VM to query the heap pool on.
  * @create: True if the heap pool should be created when it doesn't exist.
+ * @pfile: File.
  *
  * Heap pools are per-VM. This function allows one to retrieve the heap pool
  * attached to a VM.
@@ -1882,16 +1883,19 @@ struct panthor_vm *panthor_vm_get(struct panthor_vm *vm)
  *
  * Return: A valid pointer on success, an ERR_PTR() otherwise.
  */
-struct panthor_heap_pool *panthor_vm_get_heap_pool(struct panthor_vm *vm, bool create)
+struct panthor_heap_pool *panthor_vm_get_heap_pool(struct panthor_vm *vm, bool create,
+						   struct panthor_file *pfile)
 {
 	struct panthor_heap_pool *pool;
+
+	drm_WARN_ON(&vm->ptdev->base, (!create && pfile));
 
 	mutex_lock(&vm->heaps.lock);
 	if (!vm->heaps.pool && create) {
 		if (vm->destroyed)
 			pool = ERR_PTR(-EINVAL);
 		else
-			pool = panthor_heap_pool_create(vm->ptdev, vm);
+			pool = panthor_heap_pool_create(vm->ptdev, vm, pfile);
 
 		if (!IS_ERR(pool))
 			vm->heaps.pool = panthor_heap_pool_get(pool);
