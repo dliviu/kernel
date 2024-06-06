@@ -163,6 +163,7 @@ struct panthor_device {
 		struct page *dummy_latest_flush;
 	} pm;
 
+	bool profile_mode;
 	unsigned long current_frequency;
 	unsigned long fast_rate;
 };
