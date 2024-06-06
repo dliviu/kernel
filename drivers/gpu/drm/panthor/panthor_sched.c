@@ -93,7 +93,7 @@
 #define MIN_CSGS				3
 #define MAX_CSG_PRIO				0xf
 
-#define NUM_INSTRS_PER_SLOT			32
+#define NUM_INSTRS_PER_SLOT			16
 #define SLOTSIZE				(NUM_INSTRS_PER_SLOT * sizeof(u64))
 
 struct panthor_group;
@@ -807,6 +807,9 @@ struct panthor_job {
 
 	/** @done_fence: Fence signaled when the job is finished or cancelled. */
 	struct dma_fence *done_fence;
+
+	/** @is_profiled: Whether timestamp and cycle numbers were gathered for this job */
+	bool is_profiled;
 };
 
 static void
@@ -2865,7 +2868,8 @@ static void group_sync_upd_work(struct work_struct *work)
 	dma_fence_end_signalling(cookie);
 
 	list_for_each_entry_safe(job, job_tmp, &done_jobs, node) {
-		update_fdinfo_stats(job);
+		if (job->is_profiled)
+			update_fdinfo_stats(job);
 		list_del_init(&job->node);
 		panthor_job_put(&job->base);
 	}
@@ -2884,6 +2888,8 @@ queue_run_job(struct drm_sched_job *sched_job)
 	u32 ringbuf_size = panthor_kernel_bo_size(queue->ringbuf);
 	u32 ringbuf_insert = queue->iface.input->insert & (ringbuf_size - 1);
 	u32 ringbuf_index = ringbuf_insert / (SLOTSIZE);
+	bool ringbuf_wraparound =
+		job->is_profiled && ((ringbuf_size/SLOTSIZE) == ringbuf_index + 1);
 	u64 addr_reg = ptdev->csif_info.cs_reg_count -
 		       ptdev->csif_info.unpreserved_cs_reg_count;
 	u64 val_reg = addr_reg + 2;
@@ -2893,12 +2899,51 @@ queue_run_job(struct drm_sched_job *sched_job)
 		job->queue_idx * sizeof(struct panthor_syncobj_64b);
 	u64 times_addr = panthor_kernel_bo_gpuva(group->syncobjs.bo) + queue->time_offset +
 		(ringbuf_index * sizeof(struct panthor_job_times));
+	size_t call_insrt_size;
+	u64 *call_instrs;
 
 	u32 waitall_mask = GENMASK(sched->sb_slot_count - 1, 0);
 	struct dma_fence *done_fence;
 	int ret;
 
-	u64 call_instrs[NUM_INSTRS_PER_SLOT] = {
+	u64 call_instrs_simple[NUM_INSTRS_PER_SLOT] = {
+		/* MOV32 rX+2, cs.latest_flush */
+		(2ull << 56) | (val_reg << 48) | job->call_info.latest_flush,
+
+		/* FLUSH_CACHE2.clean_inv_all.no_wait.signal(0) rX+2 */
+		(36ull << 56) | (0ull << 48) | (val_reg << 40) | (0 << 16) | 0x233,
+
+		/* MOV48 rX:rX+1, cs.start */
+		(1ull << 56) | (addr_reg << 48) | job->call_info.start,
+
+		/* MOV32 rX+2, cs.size */
+		(2ull << 56) | (val_reg << 48) | job->call_info.size,
+
+		/* WAIT(0) => waits for FLUSH_CACHE2 instruction */
+		(3ull << 56) | (1 << 16),
+
+		/* CALL rX:rX+1, rX+2 */
+		(32ull << 56) | (addr_reg << 40) | (val_reg << 32),
+
+		/* MOV48 rX:rX+1, sync_addr */
+		(1ull << 56) | (addr_reg << 48) | sync_addr,
+
+		/* MOV48 rX+2, #1 */
+		(1ull << 56) | (val_reg << 48) | 1,
+
+		/* WAIT(all) */
+		(3ull << 56) | (waitall_mask << 16),
+
+		/* SYNC_ADD64.system_scope.propage_err.nowait rX:rX+1, rX+2*/
+		(51ull << 56) | (0ull << 48) | (addr_reg << 40) | (val_reg << 32) | (0 << 16) | 1,
+
+		/* ERROR_BARRIER, so we can recover from faults at job
+		 * boundaries.
+		 */
+		(47ull << 56),
+	};
+
+	u64 call_instrs_profile[NUM_INSTRS_PER_SLOT*2] = {
 		/* MOV32 rX+2, cs.latest_flush */
 		(2ull << 56) | (val_reg << 48) | job->call_info.latest_flush,
 
@@ -2960,8 +3005,17 @@ queue_run_job(struct drm_sched_job *sched_job)
 	};
 
 	/* Need to be cacheline aligned to please the prefetcher. */
-	static_assert(sizeof(call_instrs) % 64 == 0,
+	static_assert(sizeof(call_instrs_simple) % 64 == 0 && sizeof(call_instrs_profile) % 64 == 0,
 		      "call_instrs is not aligned on a cacheline");
+
+	if (job->is_profiled) {
+		call_instrs = call_instrs_profile;
+		call_insrt_size = sizeof(call_instrs_profile);
+
+	} else {
+		call_instrs = call_instrs_simple;
+		call_insrt_size = sizeof(call_instrs_simple);
+	}
 
 	/* Stream size is zero, nothing to do => return a NULL fence and let
 	 * drm_sched signal the parent.
@@ -2985,8 +3039,23 @@ queue_run_job(struct drm_sched_job *sched_job)
 		       queue->fence_ctx.id,
 		       atomic64_inc_return(&queue->fence_ctx.seqno));
 
-	memcpy(queue->ringbuf->kmap + ringbuf_insert,
-	       call_instrs, sizeof(call_instrs));
+	/*
+	 * Need to handle the wrap-around case when copying profiled instructions
+	 * from an odd-indexed slot. The reason this can happen is user space is
+	 * able to control the profiling status of the driver through a sysfs
+	 * knob, so this might lead to a timestamp and cycles-profiling call
+	 * instruction stream beginning at an odd-number slot. The GPU should
+	 * be able to gracefully handle this.
+	 */
+	if (!ringbuf_wraparound) {
+		memcpy(queue->ringbuf->kmap + ringbuf_insert,
+		       call_instrs, call_insrt_size);
+	} else {
+		memcpy(queue->ringbuf->kmap + ringbuf_insert,
+		       call_instrs, call_insrt_size/2);
+		memcpy(queue->ringbuf->kmap, call_instrs +
+		       NUM_INSTRS_PER_SLOT, call_insrt_size/2);
+	}
 
 	panthor_job_get(&job->base);
 	spin_lock(&queue->fence_ctx.lock);
@@ -2994,7 +3063,7 @@ queue_run_job(struct drm_sched_job *sched_job)
 	spin_unlock(&queue->fence_ctx.lock);
 
 	job->ringbuf.start = queue->iface.input->insert;
-	job->ringbuf.end = job->ringbuf.start + sizeof(call_instrs);
+	job->ringbuf.end = job->ringbuf.start + call_insrt_size;
 	job->ringbuf_idx = ringbuf_index;
 
 	/* Make sure the ring buffer is updated before the INSERT
@@ -3141,9 +3210,14 @@ group_create_queue(struct panthor_group *group,
 	queue->time_offset = group->syncobjs.job_times_offset +
 		(slots_so_far * sizeof(struct panthor_job_times));
 
+	/*
+	 * Credit limit argument tells us the total number of instructions
+	 * across all CS slots in the ringbuffer, with some jobs requiring
+	 * twice as many as others, depending on their profiling status.
+	 */
 	ret = drm_sched_init(&queue->scheduler, &panthor_queue_sched_ops,
 			     group->ptdev->scheduler->wq, 1,
-			     args->ringbuf_size / SLOTSIZE,
+			     args->ringbuf_size / sizeof(u64),
 			     0, msecs_to_jiffies(JOB_TIMEOUT_MS),
 			     group->ptdev->reset.wq,
 			     NULL, "panthor-queue", group->ptdev->base.dev);
@@ -3538,9 +3612,12 @@ panthor_job_create(struct panthor_file *pfile,
 		goto err_put_job;
 	}
 
+	job->is_profiled = pfile->ptdev->profile_mode;
+
 	ret = drm_sched_job_init(&job->base,
 				 &job->group->queues[job->queue_idx]->entity,
-				 1, job->group);
+				 job->is_profiled ? NUM_INSTRS_PER_SLOT * 2 :
+				 NUM_INSTRS_PER_SLOT, job->group);
 	if (ret)
 		goto err_put_job;
 
