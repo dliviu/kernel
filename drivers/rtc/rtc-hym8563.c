@@ -371,10 +371,20 @@ static struct clk *hym8563_clkout_register_clk(struct hym8563 *hym8563)
 {
 	struct i2c_client *client = hym8563->client;
 	struct device_node *node = client->dev.of_node;
+	struct device_node *fixed_clock;
 	struct clk *clk;
 	struct clk_init_data init;
 	int ret;
 
+	fixed_clock = of_get_child_by_name(node, "clock");
+	if (fixed_clock) {
+		/*
+		 * fixed clock is registered automatically when
+		 * referenced, so skip registering it here
+		 */
+		of_node_put(fixed_clock);
+		return NULL;
+	}
 	ret = i2c_smbus_write_byte_data(client, HYM8563_CLKOUT,
 						0);
 	if (ret < 0)

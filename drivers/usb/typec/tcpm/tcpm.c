@@ -5044,7 +5044,7 @@ static void run_state_machine(struct tcpm_port *port)
 				       PD_T_SINK_WAIT_CAP);
 		} else {
 			tcpm_set_state(port, SNK_WAIT_CAPABILITIES_TIMEOUT,
-				       PD_T_SINK_WAIT_CAP);
+				       3 * PD_T_SINK_WAIT_CAP);
 		}
 		break;
 	case SNK_WAIT_CAPABILITIES_TIMEOUT:
